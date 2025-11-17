@@ -1,0 +1,51 @@
+CONFIDENCE_THRESHOLD = 0.7
+IOU_THRESHOLD = 0.45
+IMAGE_SIZE = 640
+DEVICE = "cpu"
+HALF_PRECISION = False
+
+SERVER_HOST = "0.0.0.0"
+SERVER_PORT = 3000
+CORS_ORIGINS = "*"
+
+MODEL_PATH = "model/final_model.pt"
+VERBOSE_INFERENCE = False
+
+MAX_DETECTIONS = 300
+AGNOSTIC_NMS = False
+
+PRESET_HIGH_ACCURACY = {
+    "conf": 0.7,
+    "iou": 0.45,
+    "max_det": 100,
+}
+
+PRESET_BALANCED = {
+    "conf": 0.6,
+    "iou": 0.5,
+    "max_det": 200,
+}
+
+PRESET_HIGH_RECALL = {
+    "conf": 0.4,
+    "iou": 0.5,
+    "max_det": 300,
+}
+
+PRESET_VERY_HIGH_ACCURACY = {
+    "conf": 0.8,
+    "iou": 0.4,
+    "max_det": 50,
+}
+
+ACTIVE_PRESET = "VERY_HIGH_ACCURACY"
+
+SHOW_CONFIDENCE = True
+SHOW_CLASS_ID = False
+BBOX_COLOR = (0, 255, 0)
+BBOX_THICKNESS = 2
+FONT_SCALE = 0.5
+
+FRAME_MAX_DIM = 640
+PERFORMANCE_LOG_INTERVAL = 100
+LOG_SEPARATOR_LENGTH = 50
