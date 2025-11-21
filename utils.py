@@ -83,6 +83,47 @@ def format_detections(results) -> List[Dict[str, Any]]:
     return detections
 
 
+def get_yolo_scale_info(result, original_width: int, original_height: int, image_size: int = 640) -> Dict[str, Any]:
+    """
+    Get scaling information from YOLO results to transform coordinates back to original image
+    
+    Args:
+        result: YOLO result object
+        original_width: Original image width
+        original_height: Original image height
+        image_size: YOLO processing image size (default 640)
+        
+    Returns:
+        Dict with scale factors and padding information
+    """
+    if hasattr(result, 'orig_shape') and result.orig_shape is not None:
+        orig_h, orig_w = result.orig_shape
+    else:
+        orig_h, orig_w = original_height, original_width
+    
+    if hasattr(result, 'shape') and result.shape is not None:
+        processed_h, processed_w = result.shape[-2:]
+    else:
+        processed_h = processed_w = image_size
+    
+    scale = min(processed_w / orig_w, processed_h / orig_h)
+    new_w = int(orig_w * scale)
+    new_h = int(orig_h * scale)
+    
+    pad_x = (processed_w - new_w) / 2
+    pad_y = (processed_h - new_h) / 2
+    
+    return {
+        'scale': scale,
+        'pad_x': pad_x,
+        'pad_y': pad_y,
+        'new_w': new_w,
+        'new_h': new_h,
+        'processed_w': processed_w,
+        'processed_h': processed_h
+    }
+
+
 def filter_detections_by_confidence(detections: List[Dict[str, Any]], 
                                   min_confidence: float = 0.5) -> List[Dict[str, Any]]:
     """
@@ -153,3 +194,50 @@ def get_image_info(image: np.ndarray) -> Dict[str, Any]:
         'channels': channels,
         'dtype': str(image.dtype)
     }
+
+
+def scale_bboxes_to_original(detections: List[Dict[str, Any]], 
+                             original_width: int, 
+                             original_height: int,
+                             scale_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Scale bounding box coordinates from YOLO's letterboxed coordinate system back to original image dimensions
+    
+    Args:
+        detections: List of detection dictionaries with bbox coordinates
+        original_width: Original image width
+        original_height: Original image height
+        scale_info: Dictionary with scale, pad_x, pad_y from get_yolo_scale_info()
+        
+    Returns:
+        List[Dict]: Detections with scaled bounding boxes
+    """
+    scale = scale_info['scale']
+    pad_x = scale_info['pad_x']
+    pad_y = scale_info['pad_y']
+    
+    if scale == 1.0 and pad_x == 0 and pad_y == 0:
+        return detections
+    
+    scaled_detections = []
+    for det in detections:
+        bbox = det['bbox']
+        
+        x1, y1, x2, y2 = bbox
+        
+        x1 = (x1 - pad_x) / scale
+        y1 = (y1 - pad_y) / scale
+        x2 = (x2 - pad_x) / scale
+        y2 = (y2 - pad_y) / scale
+        
+        x1 = max(0, min(x1, original_width))
+        y1 = max(0, min(y1, original_height))
+        x2 = max(0, min(x2, original_width))
+        y2 = max(0, min(y2, original_height))
+        
+        scaled_bbox = [x1, y1, x2, y2]
+        scaled_det = det.copy()
+        scaled_det['bbox'] = scaled_bbox
+        scaled_detections.append(scaled_det)
+    
+    return scaled_detections

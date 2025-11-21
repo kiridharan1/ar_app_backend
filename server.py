@@ -15,7 +15,9 @@ from utils import (
     format_detections,
     filter_detections_by_confidence,
     filter_detections_by_class,
-    get_image_info
+    get_image_info,
+    scale_bboxes_to_original,
+    get_yolo_scale_info
 )
 
 logging.basicConfig(
@@ -237,7 +239,12 @@ class YOLODetectionServer:
         image = decode_base64_to_image(image_data)
         
         image_info = get_image_info(image)
-        logger.debug(f"Processing image: {image_info['width']}x{image_info['height']}")
+        original_width = image_info['width']
+        original_height = image_info['height']
+        logger.debug(f"Processing image: {original_width}x{original_height}")
+        
+        input_to_yolo_width = original_width
+        input_to_yolo_height = original_height
         
         if config.FRAME_MAX_DIM > 0:
             height, width = image.shape[:2]
@@ -250,7 +257,9 @@ class YOLODetectionServer:
                     new_width = int(width * (config.FRAME_MAX_DIM / height))
                 
                 image = resize_frame(image, (new_width, new_height))
-                logger.debug(f"Resized image to: {new_width}x{new_height}")
+                input_to_yolo_width = new_width
+                input_to_yolo_height = new_height
+                logger.debug(f"Pre-resized image to: {input_to_yolo_width}x{input_to_yolo_height}")
         
         yolo_params = {
             'conf': config.CONFIDENCE_THRESHOLD,
@@ -264,6 +273,28 @@ class YOLODetectionServer:
         results = self.model(image, **yolo_params)
         
         detections = format_detections(results)
+        
+        if results and len(results) > 0:
+            result = results[0]
+            scale_info = get_yolo_scale_info(result, input_to_yolo_width, input_to_yolo_height, config.IMAGE_SIZE)
+            detections = scale_bboxes_to_original(
+                detections,
+                input_to_yolo_width,
+                input_to_yolo_height,
+                scale_info
+            )
+            
+            if input_to_yolo_width != original_width or input_to_yolo_height != original_height:
+                width_scale = original_width / input_to_yolo_width
+                height_scale = original_height / input_to_yolo_height
+                for det in detections:
+                    bbox = det['bbox']
+                    det['bbox'] = [
+                        bbox[0] * width_scale,
+                        bbox[1] * height_scale,
+                        bbox[2] * width_scale,
+                        bbox[3] * height_scale
+                    ]
         
         if 'min_confidence' in options:
             min_conf = float(options['min_confidence'])
