@@ -32,6 +32,9 @@ def decode_base64_to_image(base64_string: str) -> np.ndarray:
         # Decode image
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
+        if image is None:
+            raise ValueError("Failed to decode image data - invalid image format")
+        
         return image
     except Exception as e:
         raise ValueError(f"Failed to decode base64 image: {str(e)}")
@@ -51,12 +54,13 @@ def resize_frame(image: np.ndarray, target_size: Tuple[int, int] = (640, 640)) -
     return cv2.resize(image, target_size)
 
 
-def format_detections(results) -> List[Dict[str, Any]]:
+def format_detections(results, model=None) -> List[Dict[str, Any]]:
     """
     Format YOLO detection results for JSON serialization
     
     Args:
         results: YOLO inference results
+        model: Optional YOLO model object for accessing class names
         
     Returns:
         List[Dict]: Formatted detections with bbox, confidence, and class
@@ -71,12 +75,25 @@ def format_detections(results) -> List[Dict[str, Any]]:
             confidences = result.boxes.conf.cpu().numpy()
             class_ids = result.boxes.cls.cpu().numpy().astype(int)
             
+            # Get class names from model or result
+            names = None
+            if model is not None and hasattr(model, 'names'):
+                names = model.names
+            elif hasattr(result, 'names'):
+                names = result.names
+            
             for i in range(len(boxes)):
+                class_id = int(class_ids[i])
+                if names is not None and class_id in names:
+                    class_name = names[class_id]
+                else:
+                    class_name = f'class_{class_id}'
+                
                 detection = {
                     'bbox': boxes[i].tolist(), 
                     'confidence': float(confidences[i]),
-                    'class_id': int(class_ids[i]),
-                    'class_name': result.names[class_ids[i]] if hasattr(result, 'names') else f'class_{class_ids[i]}'
+                    'class_id': class_id,
+                    'class_name': class_name
                 }
                 detections.append(detection)
     

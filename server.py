@@ -272,7 +272,7 @@ class YOLODetectionServer:
         }
         results = self.model(image, **yolo_params)
         
-        detections = format_detections(results)
+        detections = format_detections(results, model=self.model)
         
         if results and len(results) > 0:
             result = results[0]
