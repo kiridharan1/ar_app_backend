@@ -1,6 +1,8 @@
-ultralytics
-python-socketio[asyncio_server]
-uvicorn
+aiohttp
+python-socketio[asyncio]
 opencv-python
 numpy
-aiohttp
+torch
+ultralytics
+
+

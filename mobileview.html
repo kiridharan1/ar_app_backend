@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Live Detection - Mobile View</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #020617;
+        color: #f9fafb;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      .app {
+        position: relative;
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        background: #000;
+      }
+      .video-container {
+        position: absolute;
+        inset: 0;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      video,
+      canvas {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform-origin: center center;
+      }
+      /* Prefer portrait usage */
+      @media (orientation: landscape) {
+        .rotate-hint {
+          opacity: 1;
+        }
+      }
+      .overlay-top {
+        position: absolute;
+        top: env(safe-area-inset-top, 12px);
+        left: 0;
+        right: 0;
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        pointer-events: none;
+      }
+      .badge {
+        background: rgba(15, 23, 42, 0.85);
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(12px);
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #ef4444;
+        box-shadow: 0 0 10px rgba(248, 113, 113, 0.9);
+      }
+      .dot.active {
+        background: #22c55e;
+        box-shadow: 0 0 10px rgba(34, 197, 94, 0.9);
+      }
+      .class-pill {
+        background: rgba(15, 23, 42, 0.85);
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        pointer-events: auto;
+      }
+      .overlay-bottom {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: env(safe-area-inset-bottom, 16px);
+        padding: 0 16px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: center;
+        pointer-events: none;
+      }
+      .controls {
+        display: flex;
+        width: 100%;
+        max-width: 420px;
+        justify-content: space-between;
+        gap: 12px;
+        pointer-events: auto;
+      }
+      button {
+        flex: 1;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 16px;
+        font-size: 15px;
+        font-weight: 500;
+        cursor: pointer;
+        background: linear-gradient(135deg, #6366f1, #22c55e);
+        color: white;
+        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.6);
+        transition: transform 0.08s ease, box-shadow 0.08s ease, opacity 0.15s ease;
+      }
+      button.secondary {
+        background: rgba(15, 23, 42, 0.9);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85);
+        color: #e5e7eb;
+        border: 1px solid rgba(148, 163, 184, 0.6);
+      }
+      button:disabled {
+        opacity: 0.5;
+        box-shadow: none;
+        cursor: default;
+      }
+      button:not(:disabled):active {
+        transform: translateY(1px) scale(0.97);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.9);
+      }
+      .small-info {
+        font-size: 11px;
+        color: #9ca3af;
+        text-align: center;
+      }
+      .rotate-hint {
+        position: absolute;
+        bottom: 50%;
+        left: 50%;
+        transform: translate(-50%, 50%);
+        font-size: 12px;
+        color: #9ca3af;
+        background: rgba(15, 23, 42, 0.85);
+        padding: 6px 10px;
+        border-radius: 999px;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      .socket-status {
+        font-size: 10px;
+        color: #9ca3af;
+      }
+      .socket-status span {
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="video-container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+
+      <div class="overlay-top">
+        <div class="badge">
+          <div id="record-dot" class="dot"></div>
+          <span id="status-text">Idle</span>
+        </div>
+        <div class="class-pill" id="class-pill">Class: –</div>
+      </div>
+
+      <div class="overlay-bottom">
+        <div class="controls">
+          <button id="start-btn">Start camera</button>
+          <button id="toggle-stream-btn" class="secondary" disabled>Pause</button>
+        </div>
+        <div class="small-info">
+          <div id="socket-status" class="socket-status">Socket: <span style="color: #f97316">connecting…</span></div>
+          <div id="fps-info">FPS: – · Last: –</div>
+        </div>
+      </div>
+
+      <div class="rotate-hint">For best experience, hold your phone upright</div>
+    </div>
+
+    <script>
+      const BACKEND_URL = "http://localhost:5000";
+      const FRAME_INTERVAL_MS = 200;
+      // detect mobile vs desktop
+      const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+      const videoEl = document.getElementById("video");
+      const canvasEl = document.getElementById("overlay");
+      const ctx = canvasEl.getContext("2d");
+
+      const startBtn = document.getElementById("start-btn");
+      const toggleStreamBtn = document.getElementById("toggle-stream-btn");
+
+      const recordDot = document.getElementById("record-dot");
+      const statusText = document.getElementById("status-text");
+      const classPill = document.getElementById("class-pill");
+      const socketStatusEl = document.getElementById("socket-status");
+      const fpsInfoEl = document.getElementById("fps-info");
+
+      let mediaStream = null;
+      let sendLoopId = null;
+      let sendingEnabled = false;
+      let lastDetectionTimeMs = null;
+
+      function resizeCanvas() {
+        if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+        canvasEl.width = videoEl.videoWidth;
+        canvasEl.height = videoEl.videoHeight;
+      }
+
+      function clearOverlay() {
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+      }
+
+      function drawBBox(bbox) {
+        if (!bbox || bbox.length !== 4) return;
+        resizeCanvas();
+        const [x1, y1, x2, y2] = bbox.map(Number);
+        clearOverlay();
+        ctx.save();
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "rgba(34, 197, 94, 0.9)";
+        ctx.shadowBlur = 15;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.restore();
+      }
+
+      // Socket.IO
+      const socket = io(BACKEND_URL, {
+        transports: ["websocket"],
+        reconnection: true,
+      });
+
+      socket.on("connect", () => {
+        socketStatusEl.innerHTML = 'Socket: <span style="color:#22c55e">connected</span>';
+      });
+
+      socket.on("disconnect", (reason) => {
+        socketStatusEl.innerHTML = 'Socket: <span style="color:#ef4444">disconnected</span>';
+      });
+
+      socket.on("connect_error", (err) => {
+        socketStatusEl.innerHTML = 'Socket: <span style="color:#ef4444">error</span>';
+      });
+
+      socket.on("detection", (data) => {
+        updateDetectionUI(data);
+      });
+
+      function updateDetectionUI(payload) {
+        const { detected, class_name, bbox, timestamp } = payload;
+
+        if (detected) {
+          recordDot.classList.add("active");
+          statusText.textContent = class_name || "Detected";
+          classPill.textContent = "Class: " + (class_name || "Unknown");
+          drawBBox(bbox);
+        } else {
+          recordDot.classList.remove("active");
+          statusText.textContent = "No detection";
+          classPill.textContent = "Class: –";
+          clearOverlay();
+        }
+
+        if (typeof timestamp === "number") {
+          const nowMs = timestamp * 1000;
+          const timeText = new Date(nowMs).toLocaleTimeString();
+          if (lastDetectionTimeMs) {
+            const delta = nowMs - lastDetectionTimeMs;
+            if (delta > 0) {
+              const fps = 1000 / delta;
+              fpsInfoEl.textContent = `FPS: ${fps.toFixed(1)} · Last: ${timeText}`;
+            }
+          } else {
+            fpsInfoEl.textContent = `FPS: – · Last: ${timeText}`;
+          }
+          lastDetectionTimeMs = nowMs;
+        }
+      }
+
+      async function startCamera() {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              // desktop: front cam, mobile: back cam
+              facingMode: isMobile ? "environment" : "user",
+            },
+            audio: false,
+          });
+          videoEl.srcObject = mediaStream;
+          startBtn.disabled = true;
+          toggleStreamBtn.disabled = false;
+          sendingEnabled = true;
+          toggleStreamBtn.textContent = "Pause";
+          videoEl.onloadedmetadata = () => {
+            resizeCanvas();
+          };
+          startSendingLoop();
+        } catch (err) {
+          alert("Unable to access camera: " + err.message);
+        }
+      }
+
+      function startSendingLoop() {
+        if (sendLoopId) return;
+        const loop = async () => {
+          if (!sendingEnabled || !mediaStream) return;
+          await sendFrame();
+          sendLoopId = setTimeout(loop, FRAME_INTERVAL_MS);
+        };
+        loop();
+      }
+
+      function stopSendingLoop() {
+        sendingEnabled = false;
+        if (sendLoopId) {
+          clearTimeout(sendLoopId);
+          sendLoopId = null;
+        }
+      }
+
+      async function sendFrame() {
+        if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = videoEl.videoWidth;
+        tempCanvas.height = videoEl.videoHeight;
+        const tctx = tempCanvas.getContext("2d");
+        tctx.drawImage(videoEl, 0, 0, tempCanvas.width, tempCanvas.height);
+        const dataUrl = tempCanvas.toDataURL("image/jpeg", 0.8);
+        const base64Image = dataUrl.split(",")[1];
+
+        try {
+          const res = await fetch(BACKEND_URL + "/api/frame", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ image: base64Image }),
+          });
+          if (!res.ok) {
+            return;
+          }
+          const json = await res.json();
+          updateDetectionUI(json);
+        } catch (err) {
+          // network/CORS errors will show in console
+        }
+      }
+
+      startBtn.addEventListener("click", () => {
+        startCamera();
+      });
+
+      toggleStreamBtn.addEventListener("click", () => {
+        if (!sendingEnabled) {
+          sendingEnabled = true;
+          toggleStreamBtn.textContent = "Pause";
+          startSendingLoop();
+        } else {
+          toggleStreamBtn.textContent = "Resume";
+          stopSendingLoop();
+        }
+      });
+
+      window.addEventListener("resize", resizeCanvas);
+    </script>
+  </body>
+</html>

@@ -1,403 +1,260 @@
 import asyncio
-import logging
+import base64
 import time
-import traceback
-from typing import Dict, Any, Optional
-import socketio
-import uvicorn
-from ultralytics import YOLO
-import numpy as np
+import os
+import logging
 
-import config
-from utils import (
-    decode_base64_to_image,
-    resize_frame,
-    format_detections,
-    filter_detections_by_confidence,
-    filter_detections_by_class,
-    get_image_info,
-    scale_bboxes_to_original,
-    get_yolo_scale_info
+import cv2
+import numpy as np
+import torch
+from ultralytics import YOLO
+
+import socketio
+from aiohttp import web
+
+from config import (
+    CLASS_NAMES,
+    MODEL_PATH,
+    LOCK_CONF,
+    SMOOTH_ALPHA,
+    YOLO_MISS_LIMIT,
+    FLOW_MAX_FRAMES,
+    MAX_MOVE_RATIO,
+    FEATURE_COUNT,
+    SOCKET_PORT,
 )
+
+
+# ===================== LOGGING ==================== #
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
+logger = logging.getLogger("ar-backend")
 
-logger = logging.getLogger(__name__)
+# ===================== GLOBAL STATE =============== #
 
-class YOLODetectionServer:
-    """Main YOLOv11n detection server with Socket.IO support"""
-    
-    def __init__(self):
-        self.sio = socketio.AsyncServer(
-            cors_allowed_origins=config.CORS_ORIGINS,
-            async_mode='asgi'
-        )
-        self.app = socketio.ASGIApp(self.sio)
-        self.model: Optional[YOLO] = None
-        self.connected_clients = set()
-        self.stats = {
-            'total_frames_processed': 0,
-            'total_detections': 0,
-            'average_inference_time': 0.0,
-            'server_start_time': time.time()
-        }
-        
-        self._apply_preset_config()
-        
-        self._validate_config()
-        
-        self._register_handlers()
-        
-    def _apply_preset_config(self):
-        """Apply preset configuration if specified in config"""
-        if hasattr(config, 'ACTIVE_PRESET') and config.ACTIVE_PRESET:
-            preset_name = config.ACTIVE_PRESET
-            logger.info(f"Applying preset configuration: {preset_name}")
-            
-            try:
-                if preset_name == "HIGH_ACCURACY":
-                    config.CONFIDENCE_THRESHOLD = config.PRESET_HIGH_ACCURACY['conf']
-                    config.IOU_THRESHOLD = config.PRESET_HIGH_ACCURACY['iou']
-                    config.MAX_DETECTIONS = config.PRESET_HIGH_ACCURACY['max_det']
-                elif preset_name == "BALANCED":
-                    config.CONFIDENCE_THRESHOLD = config.PRESET_BALANCED['conf']
-                    config.IOU_THRESHOLD = config.PRESET_BALANCED['iou']
-                    config.MAX_DETECTIONS = config.PRESET_BALANCED['max_det']
-                elif preset_name == "HIGH_RECALL":
-                    config.CONFIDENCE_THRESHOLD = config.PRESET_HIGH_RECALL['conf']
-                    config.IOU_THRESHOLD = config.PRESET_HIGH_RECALL['iou']
-                    config.MAX_DETECTIONS = config.PRESET_HIGH_RECALL['max_det']
-                elif preset_name == "VERY_HIGH_ACCURACY":
-                    config.CONFIDENCE_THRESHOLD = config.PRESET_VERY_HIGH_ACCURACY['conf']
-                    config.IOU_THRESHOLD = config.PRESET_VERY_HIGH_ACCURACY['iou']
-                    config.MAX_DETECTIONS = config.PRESET_VERY_HIGH_ACCURACY['max_det']
-                else:
-                    logger.warning(f"Unknown preset: {preset_name}. Using default configuration.")
-                    return
-                
-                logger.info(f"Preset applied: conf={config.CONFIDENCE_THRESHOLD}, iou={config.IOU_THRESHOLD}, max_det={config.MAX_DETECTIONS}")
-            except Exception as e:
-                logger.error(f"Failed to apply preset {preset_name}: {str(e)}")
-                logger.error("Using default configuration instead.")
-        
-    def _validate_config(self):
-        """Validate configuration parameters"""
-        errors = []
-        
-        if not (0.0 <= config.CONFIDENCE_THRESHOLD <= 1.0):
-            errors.append(f"CONFIDENCE_THRESHOLD must be between 0.0 and 1.0, got {config.CONFIDENCE_THRESHOLD}")
-        
-        if not (0.0 <= config.IOU_THRESHOLD <= 1.0):
-            errors.append(f"IOU_THRESHOLD must be between 0.0 and 1.0, got {config.IOU_THRESHOLD}")
-        
-        if config.IMAGE_SIZE <= 0:
-            errors.append(f"IMAGE_SIZE must be positive, got {config.IMAGE_SIZE}")
-        
-        if config.MAX_DETECTIONS <= 0:
-            errors.append(f"MAX_DETECTIONS must be positive, got {config.MAX_DETECTIONS}")
-        
-        if not (1 <= config.SERVER_PORT <= 65535):
-            errors.append(f"SERVER_PORT must be between 1 and 65535, got {config.SERVER_PORT}")
-        
-        if config.FRAME_MAX_DIM <= 0:
-            errors.append(f"FRAME_MAX_DIM must be positive, got {config.FRAME_MAX_DIM}")
-        
-        if errors:
-            for error in errors:
-                logger.error(f"Configuration error: {error}")
-            raise ValueError("Invalid configuration parameters")
-        
-        logger.info("Configuration validation passed")
-        
-    def _register_handlers(self):
-        """Register Socket.IO event handlers"""
-        
-        @self.sio.event
-        async def connect(sid, environ):
-            """Handle client connection"""
-            self.connected_clients.add(sid)
-            logger.info(f"Client connected: {sid} (Total: {len(self.connected_clients)})")
-            
-            await self.sio.emit('server_info', {
-                'message': 'Connected to YOLOv11n Detection Server',
-                'model_loaded': self.model is not None,
-                'device': config.DEVICE,
-                'confidence_threshold': config.CONFIDENCE_THRESHOLD,
-                'server_uptime': time.time() - self.stats['server_start_time']
-            }, room=sid)
-            
-        @self.sio.event
-        async def disconnect(sid):
-            """Handle client disconnection"""
-            if sid in self.connected_clients:
-                self.connected_clients.remove(sid)
-            logger.info(f"Client disconnected: {sid} (Total: {len(self.connected_clients)})")
-            
-        @self.sio.event
-        async def ping(sid, data=None):
-            """Handle ping for connection testing"""
-            await self.sio.emit('pong', {
-                'timestamp': time.time(),
-                'server_time': time.strftime('%Y-%m-%d %H:%M:%S')
-            }, room=sid)
-            
-        @self.sio.event
-        async def frame(sid, data):
-            """Handle incoming frame for detection"""
-            try:
-                start_time = time.time()
-                
-                if not isinstance(data, dict) or 'image' not in data:
-                    await self.sio.emit('error', {
-                        'message': 'Invalid frame data. Expected {"image": "base64_string"}'
-                    }, room=sid)
-                    return
-                
-                image_data = data['image']
-                if not isinstance(image_data, str):
-                    await self.sio.emit('error', {
-                        'message': 'Image data must be a base64 string'
-                    }, room=sid)
-                    return
-                
-                detections = await self._process_frame(image_data, data.get('options', {}))
-                
-                processing_time = time.time() - start_time
-                
-                self.stats['total_frames_processed'] += 1
-                self.stats['total_detections'] += len(detections)
-                
-                current_avg = self.stats['average_inference_time']
-                total_frames = self.stats['total_frames_processed']
-                self.stats['average_inference_time'] = (
-                    (current_avg * (total_frames - 1) + processing_time) / total_frames
-                )
-                
-                await self.sio.emit('detections', {
-                    'detections': detections,
-                    'processing_time': processing_time,
-                    'frame_info': {
-                        'frame_number': self.stats['total_frames_processed'],
-                        'detection_count': len(detections)
-                    },
-                    'server_stats': {
-                        'total_frames': self.stats['total_frames_processed'],
-                        'total_detections': self.stats['total_detections'],
-                        'average_time': self.stats['average_inference_time']
-                    },
-                    'display_config': {
-                        'show_confidence': config.SHOW_CONFIDENCE,
-                        'show_class_id': config.SHOW_CLASS_ID,
-                        'bbox_color': config.BBOX_COLOR,
-                        'bbox_thickness': config.BBOX_THICKNESS,
-                        'font_scale': config.FONT_SCALE
-                    }
-                }, room=sid)
-                
-                if self.stats['total_frames_processed'] % config.PERFORMANCE_LOG_INTERVAL == 0:
-                    logger.info(
-                        f"Processed {self.stats['total_frames_processed']} frames, "
-                        f"avg time: {self.stats['average_inference_time']:.3f}s, "
-                        f"total detections: {self.stats['total_detections']}"
-                    )
-                    
-            except Exception as e:
-                logger.error(f"Error processing frame from {sid}: {str(e)}")
-                logger.error(traceback.format_exc())
-                await self.sio.emit('error', {
-                    'message': f'Frame processing error: {str(e)}'
-                }, room=sid)
-                
-        @self.sio.event
-        async def get_stats(sid, data=None):
-            """Handle stats request"""
-            await self.sio.emit('stats', {
-                'server_stats': self.stats,
-                'connected_clients': len(self.connected_clients),
-                'model_info': {
-                    'loaded': self.model is not None,
-                    'device': config.DEVICE,
-                    'model_path': config.MODEL_PATH
-                },
-                'config': {
-                    'confidence_threshold': config.CONFIDENCE_THRESHOLD,
-                    'iou_threshold': config.IOU_THRESHOLD,
-                    'max_detections': config.MAX_DETECTIONS,
-                    'image_size': config.IMAGE_SIZE
-                }
-            }, room=sid)
-            
-    async def _process_frame(self, image_data: str, options: Dict[str, Any]) -> list:
-        """Process a single frame for object detection"""
-        
-        if self.model is None:
-            raise RuntimeError("Model not loaded")
-        
-        image = decode_base64_to_image(image_data)
-        
-        image_info = get_image_info(image)
-        original_width = image_info['width']
-        original_height = image_info['height']
-        logger.debug(f"Processing image: {original_width}x{original_height}")
-        
-        input_to_yolo_width = original_width
-        input_to_yolo_height = original_height
-        
-        if config.FRAME_MAX_DIM > 0:
-            height, width = image.shape[:2]
-            if max(height, width) > config.FRAME_MAX_DIM:
-                if width > height:
-                    new_width = config.FRAME_MAX_DIM
-                    new_height = int(height * (config.FRAME_MAX_DIM / width))
-                else:
-                    new_height = config.FRAME_MAX_DIM
-                    new_width = int(width * (config.FRAME_MAX_DIM / height))
-                
-                image = resize_frame(image, (new_width, new_height))
-                input_to_yolo_width = new_width
-                input_to_yolo_height = new_height
-                logger.debug(f"Pre-resized image to: {input_to_yolo_width}x{input_to_yolo_height}")
-        
-        yolo_params = {
-            'conf': config.CONFIDENCE_THRESHOLD,
-            'iou': config.IOU_THRESHOLD,
-            'verbose': config.VERBOSE_INFERENCE,
-            'device': config.DEVICE,
-            'half': config.HALF_PRECISION,
-            'max_det': config.MAX_DETECTIONS,
-            'agnostic_nms': config.AGNOSTIC_NMS,
-        }
-        results = self.model(image, **yolo_params)
-        
-        detections = format_detections(results, model=self.model)
-        
-        if results and len(results) > 0:
-            result = results[0]
-            scale_info = get_yolo_scale_info(result, input_to_yolo_width, input_to_yolo_height, config.IMAGE_SIZE)
-            detections = scale_bboxes_to_original(
-                detections,
-                input_to_yolo_width,
-                input_to_yolo_height,
-                scale_info
+state_lock = asyncio.Lock()
+
+prev_gray = None
+locked_box = None
+locked_cls = None
+features = None
+
+yolo_miss = 0
+flow_frames = 0
+
+latest_detection = {
+    "detected": False,
+    "class_id": None,
+    "class_name": None,
+    "bbox": None,
+    "timestamp": None,
+}
+
+# ===================== LOAD MODEL ================= #
+
+logger.info("Loading YOLO model from %s ...", MODEL_PATH)
+model = YOLO(MODEL_PATH)
+logger.info("Model loaded")
+
+# ===================== SOCKET.IO ================== #
+
+sio = socketio.AsyncServer(cors_allowed_origins="*")
+
+
+# Simple CORS middleware for the REST API routes
+@web.middleware
+async def cors_middleware(request, handler):
+    # Handle preflight
+    if request.method == "OPTIONS":
+        resp = web.Response(status=200)
+    else:
+        resp = await handler(request)
+
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return resp
+
+
+app = web.Application(middlewares=[cors_middleware])
+
+sio.attach(app)
+
+
+@sio.event
+async def connect(sid, environ):
+    logger.info("Client connected: %s", sid)
+
+
+@sio.event
+async def disconnect(sid):
+    logger.info("Client disconnected: %s", sid)
+
+
+# ===================== HELPERS ==================== #
+
+
+def smooth_box(prev, new, alpha=SMOOTH_ALPHA):
+    if prev is None:
+        return new
+    return prev * alpha + new * (1 - alpha)
+
+
+def extract_features(gray, box):
+    x1, y1, x2, y2 = box.astype(int)
+    roi = gray[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+
+    pts = cv2.goodFeaturesToTrack(
+        roi,
+        maxCorners=FEATURE_COUNT,
+        qualityLevel=0.02,
+        minDistance=7,
+        blockSize=7,
+    )
+
+    if pts is None:
+        return None
+
+    pts[:, 0, 0] += x1
+    pts[:, 0, 1] += y1
+    return pts
+
+
+# ===================== API ======================== #
+
+
+async def ingest_frame(request):
+    global prev_gray, locked_box, locked_cls, features
+    global yolo_miss, flow_frames, latest_detection
+
+    data = await request.json()
+    if "image" not in data:
+        return web.json_response({"error": "image missing"}, status=400)
+
+    img_bytes = base64.b64decode(data["image"])
+    img_np = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+
+    if frame is None:
+        return web.json_response({"error": "invalid image"}, status=400)
+
+    async with state_lock:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        yolo_updated = False
+
+        # ---------------- YOLO ----------------
+        with torch.no_grad():
+            result = model(frame, conf=0.4, iou=0.5)[0]
+
+        if result.boxes is not None and len(result.boxes) > 0:
+            best = None
+            best_score = 0
+
+            for b in result.boxes:
+                conf = float(b.conf[0])
+                if conf < LOCK_CONF:
+                    continue
+
+                x1, y1, x2, y2 = b.xyxy[0]
+                score = (x2 - x1) * (y2 - y1) * conf
+                if score > best_score:
+                    best_score = score
+                    best = b
+
+            if best is not None:
+                new_box = np.array(best.xyxy[0], dtype=np.float32)
+                locked_box = smooth_box(locked_box, new_box)
+                locked_cls = int(best.cls[0])
+
+                yolo_miss = 0
+                flow_frames = 0
+                features = extract_features(gray, locked_box)
+                yolo_updated = True
+        else:
+            yolo_miss += 1
+
+        # ---------------- FLOW ----------------
+        if (
+            not yolo_updated
+            and locked_box is not None
+            and prev_gray is not None
+            and features is not None
+        ):
+            new_pts, status, _ = cv2.calcOpticalFlowPyrLK(
+                prev_gray,
+                gray,
+                features,
+                None,
+                winSize=(21, 21),
+                maxLevel=3,
             )
-            
-            if input_to_yolo_width != original_width or input_to_yolo_height != original_height:
-                width_scale = original_width / input_to_yolo_width
-                height_scale = original_height / input_to_yolo_height
-                for det in detections:
-                    bbox = det['bbox']
-                    det['bbox'] = [
-                        bbox[0] * width_scale,
-                        bbox[1] * height_scale,
-                        bbox[2] * width_scale,
-                        bbox[3] * height_scale
-                    ]
-        
-        if 'min_confidence' in options:
-            min_conf = float(options['min_confidence'])
-            detections = filter_detections_by_confidence(detections, min_conf)
-            
-        if 'allowed_classes' in options:
-            allowed_classes = [int(c) for c in options['allowed_classes']]
-            detections = filter_detections_by_class(detections, allowed_classes)
-        
-        return detections
-        
-    async def load_model(self):
-        """Load the YOLOv11n model"""
-        try:
-            logger.info(f"Loading YOLOv11n model from: {config.MODEL_PATH}")
-            logger.info(f"Device: {config.DEVICE}")
-            logger.info(f"Configuration: conf={config.CONFIDENCE_THRESHOLD}, iou={config.IOU_THRESHOLD}, max_det={config.MAX_DETECTIONS}")
-            
-            self.model = YOLO(config.MODEL_PATH)
-            
-            test_image = np.zeros((config.IMAGE_SIZE, config.IMAGE_SIZE, 3), dtype=np.uint8)
-            test_yolo_params = {
-                'conf': config.CONFIDENCE_THRESHOLD,
-                'iou': config.IOU_THRESHOLD,
-                'verbose': config.VERBOSE_INFERENCE,
-                'device': config.DEVICE,
-                'half': config.HALF_PRECISION,
-                'max_det': config.MAX_DETECTIONS,
-                'agnostic_nms': config.AGNOSTIC_NMS,
+
+            good_new = new_pts[status == 1]
+            good_old = features[status == 1]
+
+            if len(good_new) >= 8:
+                dx = np.median(good_new[:, 0] - good_old[:, 0])
+                dy = np.median(good_new[:, 1] - good_old[:, 1])
+
+                w = locked_box[2] - locked_box[0]
+                h = locked_box[3] - locked_box[1]
+
+                if abs(dx) / w < MAX_MOVE_RATIO and abs(dy) / h < MAX_MOVE_RATIO:
+                    locked_box += np.array([dx, dy, dx, dy])
+                    features = good_new.reshape(-1, 1, 2)
+                    flow_frames += 1
+
+        # ---------------- DROP ----------------
+        if yolo_miss > YOLO_MISS_LIMIT or flow_frames > FLOW_MAX_FRAMES:
+            locked_box = None
+            locked_cls = None
+            features = None
+            yolo_miss = 0
+            flow_frames = 0
+
+        # ---------------- OUTPUT ----------------
+        ts = time.time()
+
+        if locked_box is not None:
+            x1, y1, x2, y2 = [int(v) for v in locked_box.astype(int)]
+            latest_detection = {
+                "detected": True,
+                "class_id": locked_cls,
+                "class_name": CLASS_NAMES[locked_cls],
+                "bbox": [x1, y1, x2, y2],
+                "timestamp": ts,
             }
-            test_results = self.model(test_image, **test_yolo_params)
-            
-            logger.info("Model loaded successfully!")
-            logger.info(f"Model classes: {len(self.model.names)} classes")
-            logger.info(f"Model device: {next(self.model.model.parameters()).device}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load model: {str(e)}")
-            logger.error(traceback.format_exc())
-            return False
-            
-    async def start_server(self):
-        """Start the Socket.IO server"""
-        try:
-            if not await self.load_model():
-                logger.error("Failed to load model. Server cannot start.")
-                return False
-                
-            logger.info(f"Starting YOLOv11n Detection Server...")
-            logger.info(f"Server: http://{config.SERVER_HOST}:{config.SERVER_PORT}")
-            logger.info(f"Device: {config.DEVICE}")
-            logger.info(f"Confidence: {config.CONFIDENCE_THRESHOLD:.1%}")
-            logger.info(f"Image Size: {config.IMAGE_SIZE}")
-            logger.info(f"CORS Origins: {config.CORS_ORIGINS}")
-            logger.info("=" * config.LOG_SEPARATOR_LENGTH)
-            
-            config_uvicorn = uvicorn.Config(
-                app=self.app,
-                host=config.SERVER_HOST,
-                port=config.SERVER_PORT,
-                log_level="info"
-            )
-            server = uvicorn.Server(config_uvicorn)
-            await server.serve()
-            
-        except Exception as e:
-            logger.error(f"Server failed to start: {str(e)}")
-            logger.error(traceback.format_exc())
-            return False
-            
-    def get_server_info(self) -> Dict[str, Any]:
-        """Get server information"""
-        return {
-            'server_stats': self.stats,
-            'connected_clients': len(self.connected_clients),
-            'model_loaded': self.model is not None,
-            'config': {
-                'host': config.SERVER_HOST,
-                'port': config.SERVER_PORT,
-                'device': config.DEVICE,
-                'model_path': config.MODEL_PATH,
-                'confidence_threshold': config.CONFIDENCE_THRESHOLD,
-                'iou_threshold': config.IOU_THRESHOLD,
-                'max_detections': config.MAX_DETECTIONS,
-                'image_size': config.IMAGE_SIZE,
-                'cors_origins': config.CORS_ORIGINS
+        else:
+            latest_detection = {
+                "detected": False,
+                "class_id": None,
+                "class_name": None,
+                "bbox": None,
+                "timestamp": ts,
             }
-        }
+
+        await sio.emit("detection", latest_detection)
+        prev_gray = gray
+
+    return web.json_response(latest_detection)
 
 
-async def main():
-    """Main function to start the server"""
-    server = YOLODetectionServer()
-    await server.start_server()
+async def get_latest(request):
+    return web.json_response(latest_detection)
 
+
+# ===================== ROUTES ===================== #
+
+app.router.add_post("/api/frame", ingest_frame)
+app.router.add_get("/api/detection/latest", get_latest)
+
+# ===================== ENTRY ====================== #
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Server stopped by user")
-    except Exception as e:
-        logger.error(f"Server crashed: {str(e)}")
-        logger.error(traceback.format_exc())
+    logger.info("Async Socket.IO + API starting on port %s", SOCKET_PORT)
+    web.run_app(app, host="0.0.0.0", port=SOCKET_PORT)

@@ -1,50 +1,41 @@
-CONFIDENCE_THRESHOLD = 0.7
-IOU_THRESHOLD = 0.45
-IMAGE_SIZE = 640
-DEVICE = "cpu"
-HALF_PRECISION = False
+import os
+from typing import Dict
 
-SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 3000
-CORS_ORIGINS = "*"
+"""
+Central configuration for the backend service.
 
-MODEL_PATH = "model/final_model.pt"
-VERBOSE_INFERENCE = False
+All tunable parameters and paths live here and can be overridden
+via environment variables for different environments (dev/stage/prod).
+"""
 
-MAX_DETECTIONS = 300
-AGNOSTIC_NMS = False
 
-PRESET_HIGH_ACCURACY = {
-    "conf": 0.7,
-    "iou": 0.45,
-    "max_det": 100,
+# ===================== MODEL / CLASSES ===================== #
+
+CLASS_NAMES: Dict[int, str] = {
+    0: "ARJUNA",
+    1: "CAT",
+    2: "LION",
+    3: "NANDHI",
 }
 
-PRESET_BALANCED = {
-    "conf": 0.6,
-    "iou": 0.5,
-    "max_det": 200,
-}
+MODEL_PATH: str = os.getenv(
+    "MODEL_PATH", os.path.join("model", "final_model.pt")
+)
 
-PRESET_HIGH_RECALL = {
-    "conf": 0.4,
-    "iou": 0.5,
-    "max_det": 300,
-}
 
-PRESET_VERY_HIGH_ACCURACY = {
-    "conf": 0.8,
-    "iou": 0.4,
-    "max_det": 50,
-}
+# ===================== DETECTION PARAMS ==================== #
 
-ACTIVE_PRESET = "PRESET_HIGH_ACCURACY"
-SHOW_CONFIDENCE = True
-SHOW_CLASS_ID = False
-BBOX_COLOR = (0, 255, 0)
-BBOX_THICKNESS = 2
-FONT_SCALE = 0.5
+LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.45"))
+SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.45"))
 
-FRAME_MAX_DIM = 640
-PERFORMANCE_LOG_INTERVAL = 100
-LOG_SEPARATOR_LENGTH = 50
+YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "12"))
+FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "30"))
+MAX_MOVE_RATIO: float = float(os.getenv("MAX_MOVE_RATIO", "0.65"))
+FEATURE_COUNT: int = int(os.getenv("FEATURE_COUNT", "60"))
+
+
+# ===================== SERVER CONFIG ======================= #
+
+SOCKET_PORT: int = int(os.getenv("SOCKET_PORT", "5000"))
+
+
