@@ -56,8 +56,10 @@ latest_detection = {
 # ===================== LOAD MODEL ================= #
 
 logger.info("Loading YOLO model from %s ...", MODEL_PATH)
-model = YOLO(MODEL_PATH)
-logger.info("Model loaded")
+# Use CUDA if available; fall back to CPU
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = YOLO(MODEL_PATH).to(device)
+logger.info("Model loaded on %s", device)
 
 # ===================== SOCKET.IO ================== #
 
@@ -149,7 +151,9 @@ async def ingest_frame(request):
 
         # ---------------- YOLO ----------------
         with torch.no_grad():
-            result = model(frame, conf=0.4, iou=0.5)[0]
+            # Force smaller inference size for speed; adjust if needed
+            result = model(frame, conf=0.4, iou=0.5,
+                           imgsz=640, device=device)[0]
 
         if result.boxes is not None and len(result.boxes) > 0:
             best = None
