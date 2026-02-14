@@ -248,12 +248,27 @@ async def ingest_frame(request):
     return web.json_response(latest_detection)
 
 
+async def index(request):
+    """Main entry point route providing service status and info."""
+    return web.json_response({
+        "status": "online",
+        "service": "AR Detection Backend",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/",
+            "frame_ingestion": "/api/frame",
+            "latest_detection": "/api/detection/latest"
+        }
+    })
+
+
 async def get_latest(request):
     return web.json_response(latest_detection)
 
 
 # ===================== ROUTES ===================== #
 
+app.router.add_get("/", index)
 app.router.add_post("/api/frame", ingest_frame)
 app.router.add_get("/api/detection/latest", get_latest)
 
