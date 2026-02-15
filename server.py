@@ -127,6 +127,35 @@ def extract_features(gray, box):
     return pts
 
 
+def enhance_image_quality(frame):
+    """
+    Enhance image quality for better detection with compressed images.
+    Uses CLAHE (Contrast Limited Adaptive Histogram Equalization) and sharpening.
+    """
+    # Convert to LAB color space
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    # Apply CLAHE to L channel (brightness)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+
+    # Merge back
+    enhanced_lab = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+
+    # Optional: Sharpen (helps with JPEG compression blur)
+    kernel = np.array([[-1, -1, -1],
+                       [-1, 9, -1],
+                       [-1, -1, -1]])
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+
+    # Blend original and sharpened (70/30)
+    result = cv2.addWeighted(enhanced, 0.7, sharpened, 0.3, 0)
+
+    return result
+
+
 # ===================== API ======================== #
 
 
@@ -145,15 +174,18 @@ async def ingest_frame(request):
     if frame is None:
         return web.json_response({"error": "invalid image"}, status=400)
 
+    # Enhance image quality for better detection
+    frame = enhance_image_quality(frame)
+
     async with state_lock:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         yolo_updated = False
 
         # ---------------- YOLO ----------------
         with torch.no_grad():
-            # Force smaller inference size for speed; adjust if needed
-            result = model(frame, conf=0.4, iou=0.5,
-                           imgsz=640, device=device)[0]
+            # Use 400px imgsz for faster processing on CPU; lower conf for better detection rate
+            result = model(frame, conf=0.25, iou=0.45,
+                           imgsz=400, device=device)[0]
 
         if result.boxes is not None and len(result.boxes) > 0:
             best = None
