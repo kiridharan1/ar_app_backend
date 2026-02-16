@@ -163,33 +163,54 @@ async def ingest_frame(request):
     global prev_gray, locked_box, locked_cls, features
     global yolo_miss, flow_frames, latest_detection
 
+    start_total = time.time()
     data = await request.json()
     if "image" not in data:
         return web.json_response({"error": "image missing"}, status=400)
 
+    # 1. Decode
+    t0 = time.time()
     img_bytes = base64.b64decode(data["image"])
     img_np = np.frombuffer(img_bytes, np.uint8)
     frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+    decode_time = (time.time() - t0) * 1000
 
     if frame is None:
         return web.json_response({"error": "invalid image"}, status=400)
+    
+    # Debug: Save first frame and log dimensions
+    h, w = frame.shape[:2]
+    if not os.path.exists("debug_frame.jpg"):
+        cv2.imwrite("debug_frame.jpg", frame)
+        logger.info("DEBUG: Saved first frame to debug_frame.jpg (%dx%d)", w, h)
+    else:
+        # Periodic dimension logging
+        if int(time.time()) % 10 == 0:
+            logger.info("DEBUG: Received frame dimensions: %dx%d", w, h)
 
-    # Enhance image quality for better detection
+    # 2. Enhance
+    t0 = time.time()
     frame = enhance_image_quality(frame)
+    enhance_time = (time.time() - t0) * 1000
 
     async with state_lock:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         yolo_updated = False
 
-        # ---------------- YOLO ----------------
+        # 3. YOLO Inference
+        t0 = time.time()
         with torch.no_grad():
-            # Use 400px imgsz for faster processing on CPU; lower conf for better detection rate
-            result = model(frame, conf=0.25, iou=0.45,
-                           imgsz=400, device=device)[0]
+            # Lower conf to 0.1 to see raw results
+            result = model(frame, conf=0.1, iou=0.45,
+                           imgsz=400, device=device, verbose=False)[0]
+        yolo_time = (time.time() - t0) * 1000
 
         if result.boxes is not None and len(result.boxes) > 0:
             best = None
             best_score = 0
+            
+            # Debug: Log raw detection count
+            logger.info("DEBUG: YOLO found %d raw boxes", len(result.boxes))
 
             for b in result.boxes:
                 conf = float(b.conf[0])
@@ -214,13 +235,15 @@ async def ingest_frame(request):
         else:
             yolo_miss += 1
 
-        # ---------------- FLOW ----------------
+        # 4. Optical Flow
+        flow_time = 0
         if (
             not yolo_updated
             and locked_box is not None
             and prev_gray is not None
             and features is not None
         ):
+            t0 = time.time()
             new_pts, status, _ = cv2.calcOpticalFlowPyrLK(
                 prev_gray,
                 gray,
@@ -244,6 +267,7 @@ async def ingest_frame(request):
                     locked_box += np.array([dx, dy, dx, dy])
                     features = good_new.reshape(-1, 1, 2)
                     flow_frames += 1
+            flow_time = (time.time() - t0) * 1000
 
         # ---------------- DROP ----------------
         if yolo_miss > YOLO_MISS_LIMIT or flow_frames > FLOW_MAX_FRAMES:
@@ -276,6 +300,13 @@ async def ingest_frame(request):
 
         await sio.emit("detection", latest_detection)
         prev_gray = gray
+
+    total_time = (time.time() - start_total) * 1000
+    
+    logger.info(
+        "Perf: Total=%.1fms [Decode=%.1fms, Enhance=%.1fms, YOLO=%.1fms, Flow=%.1fms] Det=%s",
+        total_time, decode_time, enhance_time, yolo_time, flow_time, latest_detection['detected']
+    )
 
     return web.json_response(latest_detection)
 

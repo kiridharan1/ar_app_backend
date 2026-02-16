@@ -306,7 +306,7 @@
   </div>
 
   <script>
-    let BACKEND_URL = localStorage.getItem("backend_url") || "http://localhost:5000";
+    let BACKEND_URL = localStorage.getItem("backend_url") || window.location.origin;
     console.log("BACKEND_URL", BACKEND_URL);
     const FRAME_INTERVAL_MS = 200;
     // detect mobile vs desktop

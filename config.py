@@ -25,7 +25,7 @@ MODEL_PATH: str = os.getenv(
 
 # ===================== DETECTION PARAMS ==================== #
 
-LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.35"))
+LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.15"))
 SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.25"))
 YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "2"))
 
