@@ -27,8 +27,8 @@ MODEL_PATH: str = os.getenv(
 
 LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.35"))
 SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.25"))
-
 YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "2"))
+
 FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "0"))
 MAX_MOVE_RATIO: float = float(os.getenv("MAX_MOVE_RATIO", "0.65"))
 FEATURE_COUNT: int = int(os.getenv("FEATURE_COUNT", "60"))

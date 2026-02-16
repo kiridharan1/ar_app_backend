@@ -298,11 +298,17 @@ async def get_latest(request):
     return web.json_response(latest_detection)
 
 
+async def mobile_view(request):
+    """Serve the mobile view HTML page."""
+    return web.FileResponse("mobileview.html")
+
+
 # ===================== ROUTES ===================== #
 
 app.router.add_get("/", index)
 app.router.add_post("/api/frame", ingest_frame)
 app.router.add_get("/api/detection/latest", get_latest)
+app.router.add_get("/public", mobile_view)
 
 # ===================== ENTRY ====================== #
 
