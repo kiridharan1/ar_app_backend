@@ -178,15 +178,12 @@ async def ingest_frame(request):
     if frame is None:
         return web.json_response({"error": "invalid image"}, status=400)
     
-    # Debug: Save first frame and log dimensions
+    # Debug: Frequently update debug_frame.jpg and log dimensions
     h, w = frame.shape[:2]
-    if not os.path.exists("debug_frame.jpg"):
-        cv2.imwrite("debug_frame.jpg", frame)
-        logger.info("DEBUG: Saved first frame to debug_frame.jpg (%dx%d)", w, h)
-    else:
-        # Periodic dimension logging
-        if int(time.time()) % 10 == 0:
-            logger.info("DEBUG: Received frame dimensions: %dx%d", w, h)
+    cv2.imwrite("debug_frame.jpg", frame)
+    
+    if int(time.time()) % 10 == 0:
+        logger.info("DEBUG: Frame saved to debug_frame.jpg (%dx%d)", w, h)
 
     # 2. Enhance
     t0 = time.time()
@@ -202,7 +199,7 @@ async def ingest_frame(request):
         with torch.no_grad():
             # Lower conf to 0.1 to see raw results
             result = model(frame, conf=0.1, iou=0.45,
-                           imgsz=400, device=device, verbose=False)[0]
+                           imgsz=416, device=device, verbose=False)[0]
         yolo_time = (time.time() - t0) * 1000
 
         if result.boxes is not None and len(result.boxes) > 0:
@@ -211,7 +208,6 @@ async def ingest_frame(request):
             
             # Debug: Log raw detection count
             logger.info("DEBUG: YOLO found %d raw boxes", len(result.boxes))
-
             for b in result.boxes:
                 conf = float(b.conf[0])
                 if conf < LOCK_CONF:
@@ -224,7 +220,7 @@ async def ingest_frame(request):
                     best = b
 
             if best is not None:
-                new_box = np.array(best.xyxy[0], dtype=np.float32)
+                new_box = best.xyxy[0].cpu().numpy().astype(np.float32)
                 locked_box = smooth_box(locked_box, new_box)
                 locked_cls = int(best.cls[0])
 
