@@ -105,6 +105,33 @@ async def get_or_create_session(session_id: str, client_ip: str = None) -> tuple
         
         return client_sessions[session_id], session_id
 
+
+async def cleanup_idle_sessions():
+    """Background task to remove idle sessions (prevents memory leaks)."""
+    while True:
+        await asyncio.sleep(300)  # Check every 5 minutes
+        
+        current_time = time.time()
+        sessions_to_remove = []
+        
+        async with session_lock:
+            for session_id, session in client_sessions.items():
+                # Remove sessions idle for > 1 hour
+                if current_time - session.last_frame_time > 3600:
+                    sessions_to_remove.append(session_id)
+            
+            for session_id in sessions_to_remove:
+                del client_sessions[session_id]
+                # Also remove from IP mapping
+                for ip, sid in list(client_ip_to_session.items()):
+                    if sid == session_id:
+                        del client_ip_to_session[ip]
+                logger.info("Removed idle session: %s", session_id)
+            
+            if sessions_to_remove:
+                logger.info("Cleaned up %d idle sessions", len(sessions_to_remove))
+
+
 # ===================== LOAD MODEL ================= #
 
 logger.info("Loading YOLO model from %s ...", MODEL_PATH)
@@ -259,9 +286,11 @@ async def ingest_frame(request):
         if "image" not in data:
             return web.json_response({"error": "image missing"}, status=400)
         
-        # Get client IP address
-        client_ip = request.remote
+        # Get real client IP (handles proxies)
+        client_ip = request.headers.get('X-Forwarded-For', request.remote)
         if isinstance(client_ip, str):
+            # X-Forwarded-For can be "client, proxy1, proxy2"
+            client_ip = client_ip.split(',')[0].strip()
             # Remove port if present (e.g., "192.168.1.1:12345" -> "192.168.1.1")
             client_ip = client_ip.split(':')[0]
         
@@ -500,29 +529,82 @@ async def ingest_frame(request):
 async def index(request):
     """Main entry point route providing service status and info."""
     uptime = time.time() - start_time
+    
+    # Get active session count
+    async with session_lock:
+        active_sessions = len(client_sessions)
+    
     return web.json_response({
         "status": "online",
         "service": "AR Detection Backend",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "device": device,
         "uptime_seconds": round(uptime, 2),
+        "active_sessions": active_sessions,
         "config": {
             "lock_conf": LOCK_CONF,
             "yolo_miss_limit": YOLO_MISS_LIMIT,
             "flow_max_frames": FLOW_MAX_FRAMES,
-            "enhancement_enabled": ENABLE_ENHANCEMENT
+            "enhancement_enabled": ENABLE_ENHANCEMENT,
+            "idle_timeout_seconds": IDLE_TIMEOUT_SECONDS
         },
         "endpoints": {
             "health": "/",
             "frame_ingestion": "/api/frame",
+            "session_stats": "/api/sessions",
             "latest_detection": "/api/detection/latest",
             "mobile_view": "/public"
         }
     })
 
 
+async def session_stats(request):
+    """Get statistics about active sessions."""
+    async with session_lock:
+        current_time = time.time()
+        stats = {
+            "total_sessions": len(client_sessions),
+            "sessions": []
+        }
+        
+        for session_id, session in client_sessions.items():
+            idle_time = current_time - session.last_frame_time if session.last_frame_time > 0 else 0
+            stats["sessions"].append({
+                "id": session_id[:8] + "..." if len(session_id) > 8 else session_id,
+                "idle_seconds": round(idle_time, 1),
+                "has_detection": session.locked_box is not None,
+                "last_detected_class": CLASS_NAMES.get(session.locked_cls) if session.locked_cls is not None else None
+            })
+        
+        return web.json_response(stats)
+
+
 async def get_latest(request):
-    return web.json_response(latest_detection)
+    """Get latest detection from default session (for backward compatibility)."""
+    async with session_lock:
+        # Try to get from default session first
+        if "default" in client_sessions:
+            session = client_sessions["default"]
+            return web.json_response(session.latest_detection)
+        
+        # If no default session, return from any active session
+        if client_sessions:
+            # Get the most recently active session
+            most_recent_session = max(
+                client_sessions.values(),
+                key=lambda s: s.last_frame_time
+            )
+            return web.json_response(most_recent_session.latest_detection)
+        
+        # No active sessions
+        return web.json_response({
+            "detected": False,
+            "class_id": None,
+            "class_name": None,
+            "bbox": None,
+            "timestamp": None,
+            "message": "No active sessions"
+        })
 
 
 async def mobile_view(request):
@@ -534,6 +616,7 @@ async def mobile_view(request):
 
 app.router.add_get("/", index)
 app.router.add_post("/api/frame", ingest_frame)
+app.router.add_get("/api/sessions", session_stats)
 app.router.add_get("/api/detection/latest", get_latest)
 app.router.add_get("/public", mobile_view)
 
@@ -541,4 +624,10 @@ app.router.add_get("/public", mobile_view)
 
 if __name__ == "__main__":
     logger.info("Async Socket.IO + API starting on port %s", SOCKET_PORT)
+    
+    # Start background cleanup task
+    loop = asyncio.get_event_loop()
+    loop.create_task(cleanup_idle_sessions())
+    logger.info("Background session cleanup task started")
+    
     web.run_app(app, host="0.0.0.0", port=SOCKET_PORT)
