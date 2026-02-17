@@ -4,6 +4,7 @@ import time
 import os
 import logging
 import gc
+import uuid  # For generating unique session IDs
 import psutil  # For memory monitoring
 
 import cv2
@@ -48,6 +49,9 @@ frame_count_lock = asyncio.Lock()  # Only for frame counter
 client_sessions = {}
 session_lock = asyncio.Lock()  # Only for session dict access
 
+# Map client IP addresses to session IDs (for auto-assignment)
+client_ip_to_session = {}
+
 
 class ClientSession:
     """Per-client detection state for parallel processing."""
@@ -69,13 +73,37 @@ class ClientSession:
         self.lock = asyncio.Lock()  # Per-client lock
 
 
-async def get_or_create_session(session_id: str) -> ClientSession:
-    """Get existing session or create new one."""
+async def get_or_create_session(session_id: str, client_ip: str = None) -> tuple:
+    """
+    Get existing session or create new one.
+    
+    Args:
+        session_id: Session ID from client (or None)
+        client_ip: Client IP address for auto-assignment
+        
+    Returns:
+        Tuple of (ClientSession, actual_session_id_used)
+    """
     async with session_lock:
+        # If no session_id provided, try to use IP-based mapping or create new
+        if not session_id or session_id == "default":
+            if client_ip and client_ip in client_ip_to_session:
+                # Reuse existing session for this IP
+                session_id = client_ip_to_session[client_ip]
+                logger.debug("Reusing session %s for IP %s", session_id, client_ip)
+            else:
+                # Generate new unique session ID
+                session_id = str(uuid.uuid4())
+                if client_ip:
+                    client_ip_to_session[client_ip] = session_id
+                logger.info("Auto-generated session ID: %s for IP: %s", session_id, client_ip or "unknown")
+        
+        # Create session if it doesn't exist
         if session_id not in client_sessions:
             client_sessions[session_id] = ClientSession()
             logger.info("Created new session: %s", session_id)
-        return client_sessions[session_id]
+        
+        return client_sessions[session_id], session_id
 
 # ===================== LOAD MODEL ================= #
 
@@ -220,9 +248,16 @@ async def ingest_frame(request):
         if "image" not in data:
             return web.json_response({"error": "image missing"}, status=400)
         
+        # Get client IP address
+        client_ip = request.remote
+        if isinstance(client_ip, str):
+            # Remove port if present (e.g., "192.168.1.1:12345" -> "192.168.1.1")
+            client_ip = client_ip.split(':')[0]
+        
         # Get or create session for this client
-        session_id = data.get("session_id", "default")
-        session = await get_or_create_session(session_id)
+        # If frontend sends session_id, use it; otherwise auto-generate based on IP
+        session_id_from_client = data.get("session_id")
+        session, actual_session_id = await get_or_create_session(session_id_from_client, client_ip)
 
         # 1. Decode
         t0 = time.time()
@@ -260,7 +295,7 @@ async def ingest_frame(request):
         async with session.lock:
             # Check for idle timeout
             if session.last_frame_time > 0 and (current_time - session.last_frame_time) > IDLE_TIMEOUT_SECONDS:
-                logger.info("Idle timeout reached for session %s. Clearing state.", session_id)
+                logger.info("Idle timeout reached for session %s. Clearing state.", actual_session_id)
                 session.prev_gray = None
                 session.locked_box = None
                 session.locked_cls = None
