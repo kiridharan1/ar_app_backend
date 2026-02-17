@@ -25,9 +25,9 @@ MODEL_PATH: str = os.getenv(
 
 # ===================== DETECTION PARAMS ==================== #
 
-LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.15"))
+LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.5"))
 SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.25"))
-YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "2"))
+YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "1"))
 
 FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "0"))
 MAX_MOVE_RATIO: float = float(os.getenv("MAX_MOVE_RATIO", "0.65"))

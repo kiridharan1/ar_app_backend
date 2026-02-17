@@ -203,21 +203,41 @@ async def ingest_frame(request):
         yolo_time = (time.time() - t0) * 1000
 
         if result.boxes is not None and len(result.boxes) > 0:
+            h, w = frame.shape[:2]
+            cx, cy = w / 2, h / 2
+            detected_items = []
             best = None
             best_score = 0
             
-            # Debug: Log raw detection count
-            # logger.info("DEBUG: YOLO found %d raw boxes", len(result.boxes))
             for b in result.boxes:
                 conf = float(b.conf[0])
+                cls_id = int(b.cls[0])
+                name = CLASS_NAMES[cls_id]
+                
                 if conf < LOCK_CONF:
+                    # Log low confidence hits occasionally
+                    if time.time() % 5 < 0.2:
+                        logger.debug("Low conf hit: %s (%.2f)", name, conf)
                     continue
 
                 x1, y1, x2, y2 = b.xyxy[0]
-                score = (x2 - x1) * (y2 - y1) * conf
-                if score > best_score:
-                    best_score = score
+                bx, by = (x1 + x2) / 2, (y1 + y2) / 2
+                
+                dist_to_center = np.sqrt((bx - cx)**2 + (by - cy)**2)
+                max_dist = np.sqrt(cx**2 + cy**2)
+                center_score = 1.0 - (dist_to_center / max_dist)
+                
+                current_score = (conf * 0.7) + (center_score * 0.3)
+                detected_items.append((name, conf, center_score, current_score))
+                
+                if current_score > best_score:
+                    best_score = current_score
                     best = b
+
+            if detected_items:
+                # Log all candidates found in this frame
+                log_msg = " | ".join([f"{n}: c={c:.2f}, s={s:.2f}" for n, c, cs, s in detected_items])
+                logger.info("Candidates: %s", log_msg)
 
             if best is not None:
                 new_box = best.xyxy[0].cpu().numpy().astype(np.float32)
