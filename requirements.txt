@@ -4,5 +4,4 @@ opencv-python
 numpy
 torch
 ultralytics
-
-
+psutil

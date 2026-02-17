@@ -25,13 +25,22 @@ MODEL_PATH: str = os.getenv(
 
 # ===================== DETECTION PARAMS ==================== #
 
-LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.5"))
+LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0"))
 SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.25"))
 YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "1"))
 
-FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "0"))
+FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "1"))
 MAX_MOVE_RATIO: float = float(os.getenv("MAX_MOVE_RATIO", "0.65"))
 FEATURE_COUNT: int = int(os.getenv("FEATURE_COUNT", "60"))
+
+# Image enhancement (can be disabled for performance)
+ENABLE_ENHANCEMENT: bool = os.getenv("ENABLE_ENHANCEMENT", "false").lower() == "true"
+
+# Idle timeout to clear state (seconds)
+IDLE_TIMEOUT_SECONDS: int = int(os.getenv("IDLE_TIMEOUT_SECONDS", "30"))
+
+# Garbage collection interval (frames)
+GC_CLEANUP_INTERVAL: int = int(os.getenv("GC_CLEANUP_INTERVAL", "200"))
 
 
 # ===================== SERVER CONFIG ======================= #
