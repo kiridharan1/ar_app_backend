@@ -179,11 +179,11 @@ async def ingest_frame(request):
         return web.json_response({"error": "invalid image"}, status=400)
     
     # Debug: Frequently update debug_frame.jpg and log dimensions
-    h, w = frame.shape[:2]
-    cv2.imwrite("debug_frame.jpg", frame)
+    # h, w = frame.shape[:2]
+    # cv2.imwrite("debug_frame.jpg", frame)
     
-    if int(time.time()) % 10 == 0:
-        logger.info("DEBUG: Frame saved to debug_frame.jpg (%dx%d)", w, h)
+    # if int(time.time()) % 10 == 0:
+    #     logger.info("DEBUG: Frame saved to debug_frame.jpg (%dx%d)", w, h)
 
     # 2. Enhance
     t0 = time.time()
@@ -207,7 +207,7 @@ async def ingest_frame(request):
             best_score = 0
             
             # Debug: Log raw detection count
-            logger.info("DEBUG: YOLO found %d raw boxes", len(result.boxes))
+            # logger.info("DEBUG: YOLO found %d raw boxes", len(result.boxes))
             for b in result.boxes:
                 conf = float(b.conf[0])
                 if conf < LOCK_CONF:
@@ -299,10 +299,13 @@ async def ingest_frame(request):
 
     total_time = (time.time() - start_total) * 1000
     
+    det_status = f"DETECTED: {latest_detection['class_name']}" if latest_detection['detected'] else "NO DETECTION"
     logger.info(
-        "Perf: Total=%.1fms [Decode=%.1fms, Enhance=%.1fms, YOLO=%.1fms, Flow=%.1fms] Det=%s",
-        total_time, decode_time, enhance_time, yolo_time, flow_time, latest_detection['detected']
+        "Perf: Total=%.1fms [Decode=%.1fms, Enhance=%.1fms, YOLO=%.1fms, Flow=%.1fms] %s",
+        total_time, decode_time, enhance_time, yolo_time, flow_time, det_status
     )
+
+    logger.info("Latest Detected Object name is : %s", latest_detection['class_name'] if latest_detection['detected'] else "No Object Detected")
 
     return web.json_response(latest_detection)
 
