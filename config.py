@@ -25,11 +25,11 @@ MODEL_PATH: str = os.getenv(
 
 # ===================== DETECTION PARAMS ==================== #
 
-LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0"))
-SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.25"))
-YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "1"))
+LOCK_CONF: float = float(os.getenv("LOCK_CONF", "0.25"))
+SMOOTH_ALPHA: float = float(os.getenv("SMOOTH_ALPHA", "0.1"))  # Lower = more responsive (less smoothing)
+YOLO_MISS_LIMIT: int = int(os.getenv("YOLO_MISS_LIMIT", "0"))  # Drop immediately if not detected
 
-FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "1"))
+FLOW_MAX_FRAMES: int = int(os.getenv("FLOW_MAX_FRAMES", "0"))  # Disable optical flow for instant switching
 MAX_MOVE_RATIO: float = float(os.getenv("MAX_MOVE_RATIO", "0.65"))
 FEATURE_COUNT: int = int(os.getenv("FEATURE_COUNT", "60"))
 

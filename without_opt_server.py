@@ -40,42 +40,26 @@ logger = logging.getLogger("ar-backend")
 
 # ===================== GLOBAL STATE =============== #
 
+state_lock = asyncio.Lock()
 start_time = time.time()
+last_frame_time = 0.0
+
+prev_gray = None
+locked_box = None
+locked_cls = None
+features = None
+
+yolo_miss = 0
+flow_frames = 0
 frame_count = 0  # Track total frames processed for periodic cleanup
-frame_count_lock = asyncio.Lock()  # Only for frame counter
 
-# Per-client session state (keyed by session_id from client)
-client_sessions = {}
-session_lock = asyncio.Lock()  # Only for session dict access
-
-
-class ClientSession:
-    """Per-client detection state for parallel processing."""
-    def __init__(self):
-        self.prev_gray = None
-        self.locked_box = None
-        self.locked_cls = None
-        self.features = None
-        self.yolo_miss = 0
-        self.flow_frames = 0
-        self.last_frame_time = 0.0
-        self.latest_detection = {
-            "detected": False,
-            "class_id": None,
-            "class_name": None,
-            "bbox": None,
-            "timestamp": None,
-        }
-        self.lock = asyncio.Lock()  # Per-client lock
-
-
-async def get_or_create_session(session_id: str) -> ClientSession:
-    """Get existing session or create new one."""
-    async with session_lock:
-        if session_id not in client_sessions:
-            client_sessions[session_id] = ClientSession()
-            logger.info("Created new session: %s", session_id)
-        return client_sessions[session_id]
+latest_detection = {
+    "detected": False,
+    "class_id": None,
+    "class_name": None,
+    "bbox": None,
+    "timestamp": None,
+}
 
 # ===================== LOAD MODEL ================= #
 
@@ -210,7 +194,8 @@ async def ingest_frame(request):
     Returns:
         JSON response with detection results
     """
-    global frame_count
+    global prev_gray, locked_box, locked_cls, features
+    global yolo_miss, flow_frames, latest_detection, last_frame_time, frame_count
 
     start_total = time.time()
     
@@ -219,10 +204,6 @@ async def ingest_frame(request):
         data = await request.json()
         if "image" not in data:
             return web.json_response({"error": "image missing"}, status=400)
-        
-        # Get or create session for this client
-        session_id = data.get("session_id", "default")
-        session = await get_or_create_session(session_id)
 
         # 1. Decode
         t0 = time.time()
@@ -242,10 +223,8 @@ async def ingest_frame(request):
         h, w = frame.shape[:2]
         current_time = time.time()
         
-        # Increment global frame counter for periodic cleanup
-        async with frame_count_lock:
-            frame_count += 1
-            current_frame_count = frame_count
+        # Increment frame counter for periodic cleanup
+        frame_count += 1
 
         # 2. Enhance (optional)
         enhance_time = 0
@@ -254,21 +233,21 @@ async def ingest_frame(request):
             frame = enhance_image_quality(frame)
             enhance_time = (time.time() - t0) * 1000
 
-        # Prepare detection result to emit (will be populated in session lock)
+        # Prepare detection result to emit (will be populated in lock)
         detection_to_emit = None
         
-        async with session.lock:
+        async with state_lock:
             # Check for idle timeout
-            if session.last_frame_time > 0 and (current_time - session.last_frame_time) > IDLE_TIMEOUT_SECONDS:
-                logger.info("Idle timeout reached for session %s. Clearing state.", session_id)
-                session.prev_gray = None
-                session.locked_box = None
-                session.locked_cls = None
-                session.features = None
-                session.yolo_miss = 0
-                session.flow_frames = 0
+            if last_frame_time > 0 and (current_time - last_frame_time) > IDLE_TIMEOUT_SECONDS:
+                logger.info("Idle timeout reached. Clearing state.")
+                prev_gray = None
+                locked_box = None
+                locked_cls = None
+                features = None
+                yolo_miss = 0
+                flow_frames = 0
             
-            session.last_frame_time = current_time
+            last_frame_time = current_time
             
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             yolo_updated = False
@@ -320,76 +299,76 @@ async def ingest_frame(request):
 
                     if best is not None:
                         new_box = best.xyxy[0].cpu().numpy().astype(np.float32)
-                        session.locked_box = smooth_box(session.locked_box, new_box)
-                        session.locked_cls = int(best.cls[0])
+                        locked_box = smooth_box(locked_box, new_box)
+                        locked_cls = int(best.cls[0])
 
-                        session.yolo_miss = 0
-                        session.flow_frames = 0
-                        session.features = extract_features(gray, session.locked_box)
+                        yolo_miss = 0
+                        flow_frames = 0
+                        features = extract_features(gray, locked_box)
                         yolo_updated = True
                 else:
-                    session.yolo_miss += 1
+                    yolo_miss += 1
 
             # 4. Optical Flow
             flow_time = 0
             if (
                 not yolo_updated
-                and session.locked_box is not None
-                and session.prev_gray is not None
-                and session.features is not None
+                and locked_box is not None
+                and prev_gray is not None
+                and features is not None
             ):
                 t0 = time.time()
                 try:
                     new_pts, status, _ = cv2.calcOpticalFlowPyrLK(
-                        session.prev_gray,
+                        prev_gray,
                         gray,
-                        session.features,
+                        features,
                         None,
                         winSize=(21, 21),
                         maxLevel=3,
                     )
 
                     good_new = new_pts[status == 1]
-                    good_old = session.features[status == 1]
+                    good_old = features[status == 1]
 
                     if len(good_new) >= 8:
                         dx = np.median(good_new[:, 0] - good_old[:, 0])
                         dy = np.median(good_new[:, 1] - good_old[:, 1])
 
-                        box_w = session.locked_box[2] - session.locked_box[0]
-                        box_h = session.locked_box[3] - session.locked_box[1]
+                        box_w = locked_box[2] - locked_box[0]
+                        box_h = locked_box[3] - locked_box[1]
 
                         if abs(dx) / box_w < MAX_MOVE_RATIO and abs(dy) / box_h < MAX_MOVE_RATIO:
-                            session.locked_box += np.array([dx, dy, dx, dy])
-                            session.features = good_new.reshape(-1, 1, 2)
-                            session.flow_frames += 1
+                            locked_box += np.array([dx, dy, dx, dy])
+                            features = good_new.reshape(-1, 1, 2)
+                            flow_frames += 1
                 except Exception as e:
                     logger.warning("Optical flow error: %s", e)
                     
                 flow_time = (time.time() - t0) * 1000
 
             # ---------------- DROP ----------------
-            if session.yolo_miss > YOLO_MISS_LIMIT or session.flow_frames > FLOW_MAX_FRAMES:
-                session.locked_box = None
-                session.locked_cls = None
-                session.features = None
-                session.yolo_miss = 0
-                session.flow_frames = 0
+            if yolo_miss > YOLO_MISS_LIMIT or flow_frames > FLOW_MAX_FRAMES:
+                locked_box = None
+                locked_cls = None
+                features = None
+                yolo_miss = 0
+                flow_frames = 0
 
             # ---------------- OUTPUT ----------------
             ts = time.time()
 
-            if session.locked_box is not None:
-                x1, y1, x2, y2 = [int(v) for v in session.locked_box.astype(int)]
-                session.latest_detection = {
+            if locked_box is not None:
+                x1, y1, x2, y2 = [int(v) for v in locked_box.astype(int)]
+                latest_detection = {
                     "detected": True,
-                    "class_id": session.locked_cls,
-                    "class_name": CLASS_NAMES[session.locked_cls],
+                    "class_id": locked_cls,
+                    "class_name": CLASS_NAMES[locked_cls],
                     "bbox": [x1, y1, x2, y2],
                     "timestamp": ts,
                 }
             else:
-                session.latest_detection = {
+                latest_detection = {
                     "detected": False,
                     "class_id": None,
                     "class_name": None,
@@ -398,8 +377,8 @@ async def ingest_frame(request):
                 }
 
             # Copy for emission outside lock
-            detection_to_emit = session.latest_detection.copy()
-            session.prev_gray = gray
+            detection_to_emit = latest_detection.copy()
+            prev_gray = gray
 
         # Emit outside the lock to prevent blocking
         try:
@@ -409,19 +388,19 @@ async def ingest_frame(request):
 
         total_time = (time.time() - start_total) * 1000
         
-        det_status = f"DETECTED: {detection_to_emit['class_name']}" if detection_to_emit['detected'] else "NO DETECTION"
+        det_status = f"DETECTED: {latest_detection['class_name']}" if latest_detection['detected'] else "NO DETECTION"
         logger.info(
             "Perf: Total=%.1fms [Decode=%.1fms, Enhance=%.1fms, YOLO=%.1fms, Flow=%.1fms] %s",
             total_time, decode_time, enhance_time, yolo_time, flow_time, det_status
         )
 
-        if detection_to_emit['detected']:
-            logger.info("Latest Detected Object name is : %s", detection_to_emit['class_name'])
+        if latest_detection['detected']:
+            logger.info("Latest Detected Object name is : %s", latest_detection['class_name'])
         else:
             logger.info("Latest Detected Object name is : No Object Detected")
 
         # Periodic memory cleanup every GC_CLEANUP_INTERVAL frames
-        if current_frame_count % GC_CLEANUP_INTERVAL == 0:
+        if frame_count % GC_CLEANUP_INTERVAL == 0:
             # Clear PyTorch cache
             if device == "cuda":
                 torch.cuda.empty_cache()
@@ -434,7 +413,7 @@ async def ingest_frame(request):
             mem_info = process.memory_info()
             logger.info(
                 "Memory cleanup (frame %d): RSS=%.1fMB, VMS=%.1fMB",
-                current_frame_count,
+                frame_count,
                 mem_info.rss / 1024 / 1024,
                 mem_info.vms / 1024 / 1024
             )
@@ -444,7 +423,7 @@ async def ingest_frame(request):
         if 'result' in locals():
             del result
 
-        return web.json_response(detection_to_emit)
+        return web.json_response(latest_detection)
         
     except Exception as e:
         logger.exception("Unexpected error in ingest_frame")
