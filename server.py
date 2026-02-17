@@ -243,8 +243,19 @@ async def ingest_frame(request):
     start_total = time.time()
     
     try:
-        # Parse request
-        data = await request.json()
+        # Parse request with connection error handling
+        try:
+            data = await request.json()
+        except ConnectionResetError:
+            logger.warning("Connection reset by peer while reading request body")
+            return web.json_response({"error": "Connection reset by client"}, status=499)
+        except asyncio.TimeoutError:
+            logger.warning("Request timeout while reading request body")
+            return web.json_response({"error": "Request timeout"}, status=408)
+        except Exception as e:
+            logger.error("Error reading request body: %s", e)
+            return web.json_response({"error": "Invalid request body"}, status=400)
+        
         if "image" not in data:
             return web.json_response({"error": "image missing"}, status=400)
         
