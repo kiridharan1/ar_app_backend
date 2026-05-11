@@ -1,0 +1,156 @@
+# ============================================
+# AR Backend Systemd Service Management Guide
+# ============================================
+
+# ------------------------------------------------
+# 1. Go to project directory
+# ------------------------------------------------
+cd /opt/ar_app_backend
+
+
+# ------------------------------------------------
+# 2. View current service configuration
+# ------------------------------------------------
+systemctl cat ar-backend
+
+
+# ------------------------------------------------
+# 3. Start the backend service
+# ------------------------------------------------
+systemctl start ar-backend
+
+
+# ------------------------------------------------
+# 4. Stop the backend service
+# ------------------------------------------------
+systemctl stop ar-backend
+
+
+# ------------------------------------------------
+# 5. Restart the backend service
+# ------------------------------------------------
+systemctl restart ar-backend
+
+
+# ------------------------------------------------
+# 6. Check service status
+# ------------------------------------------------
+systemctl status ar-backend
+
+
+# ------------------------------------------------
+# 7. Enable auto-start on server reboot
+# ------------------------------------------------
+systemctl enable ar-backend
+
+
+# ------------------------------------------------
+# 8. Disable auto-start on server reboot
+# ------------------------------------------------
+systemctl disable ar-backend
+
+
+# ------------------------------------------------
+# 9. View live backend logs
+# ------------------------------------------------
+journalctl -u ar-backend -f
+
+
+# ------------------------------------------------
+# 10. View last 100 log lines
+# ------------------------------------------------
+journalctl -u ar-backend -n 100
+
+
+# ------------------------------------------------
+# 11. View logs since boot
+# ------------------------------------------------
+journalctl -u ar-backend -b
+
+
+# ------------------------------------------------
+# 12. Reload systemd after editing service file
+# ------------------------------------------------
+systemctl daemon-reload
+
+
+# ------------------------------------------------
+# 13. Edit service file
+# ------------------------------------------------
+nano /etc/systemd/system/ar-backend.service
+
+
+# ------------------------------------------------
+# 14. Example production-ready service file
+# ------------------------------------------------
+nano /etc/systemd/system/ar-backend.service
+
+
+# Paste the following:
+
+[Unit]
+Description=AR App Backend (Production)
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/ar_app_backend
+
+Environment=MODEL_PATH=model/final_model.pt
+Environment=SOCKET_PORT=5000
+Environment=LOG_LEVEL=INFO
+Environment=YOLO_CONFIG_DIR=/opt/ar_app_backend/.ultralytics
+Environment=OMP_NUM_THREADS=4
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/ar_app_backend/venv/bin/python server.py
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+
+# ------------------------------------------------
+# 15. Apply service file changes
+# ------------------------------------------------
+systemctl daemon-reload
+systemctl restart ar-backend
+
+
+# ------------------------------------------------
+# 16. Verify service is running
+# ------------------------------------------------
+systemctl status ar-backend
+
+
+# Expected output:
+# Active: active (running)
+
+
+# ------------------------------------------------
+# 17. Check if port 5000 is listening
+# ------------------------------------------------
+ss -tulnp | grep 5000
+
+
+# ------------------------------------------------
+# 18. Check running Python backend process
+# ------------------------------------------------
+ps aux | grep server.py
+
+
+# ------------------------------------------------
+# 19. Kill backend manually (only if required)
+# ------------------------------------------------
+pkill -f server.py
+
+
+# ------------------------------------------------
+# 20. Reboot server
+# ------------------------------------------------
+reboot
