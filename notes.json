@@ -1,0 +1,33 @@
+{
+  "categories": [
+    {
+      "id": 0,
+      "name": "ARJUNA"
+    },
+    {
+      "id": 1,
+      "name": "CAT"
+    },
+    {
+      "id": 2,
+      "name": "LION"
+    },
+    {
+      "id": 3,
+      "name": "NANDHI"
+    },
+    {
+      "id": 4,
+      "name": "Charger"
+    },
+    {
+      "id": 5,
+      "name": "golf-ball"
+    }
+  ],
+  "info": {
+    "year": 2025,
+    "version": "1.0",
+    "contributor": "Label Studio"
+  }
+}

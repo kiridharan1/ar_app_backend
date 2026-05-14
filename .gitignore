@@ -8,6 +8,7 @@ venv/
 .venv/
 env/
 .env/
+.venv-train/
 
 # Distribution / packaging
 build/
@@ -29,9 +30,12 @@ logs/
 Thumbs.db
 
 
-
 # Misc
 *.tmp
 *.bak
 
 
+data/**/**
+data_charger/
+data_golf/
+runs/

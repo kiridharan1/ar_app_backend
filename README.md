@@ -27,7 +27,8 @@ The backend is built with `aiohttp`, `python-socketio`, `opencv-python`, `torch`
 
 1. **Install Python**
    - Use Python **3.9–3.11**.
-   - Verify:  
+   - Verify:
+
      ```bash
      python --version
      ```
@@ -40,14 +41,19 @@ The backend is built with `aiohttp`, `python-socketio`, `opencv-python`, `torch`
    ```
 
    - Git Bash:
+
      ```bash
      source venv/Scripts/activate
      ```
+
    - PowerShell:
+
      ```powershell
      venv\Scripts\Activate.ps1
      ```
+
    - cmd:
+
      ```cmd
      venv\Scripts\activate.bat
      ```
@@ -88,6 +94,7 @@ Key settings:
 ### Setting environment variables (examples)
 
 - Git Bash:
+
   ```bash
   export MODEL_PATH="model/final_model.pt"
   export SOCKET_PORT=5000
@@ -95,6 +102,7 @@ Key settings:
   ```
 
 - PowerShell:
+
   ```powershell
   $env:MODEL_PATH="model/final_model.pt"
   $env:SOCKET_PORT="5000"
@@ -120,12 +128,15 @@ The server starts an `aiohttp` app and Socket.IO server, listening on:
 
 - **POST `/api/frame`**
   - Body (JSON):
+
     ```json
     {
       "image": "<base64-encoded JPEG/PNG frame>"
     }
     ```
+
   - Response (JSON):
+
     ```json
     {
       "detected": true,
@@ -135,7 +146,9 @@ The server starts an `aiohttp` app and Socket.IO server, listening on:
       "timestamp": 1730000000.123
     }
     ```
+
     or, if nothing is locked:
+
     ```json
     {
       "detected": false,
@@ -182,21 +195,25 @@ python run_inference.py --source <path_or_index> [--save] [--model PATH] [--conf
 Examples:
 
 - Single image and save result:
+
   ```bash
   python run_inference.py --source images/portrait.jpg --save
   ```
 
 - Folder of images:
+
   ```bash
   python run_inference.py --source test_files/images/ --save
   ```
 
 - Video file:
+
   ```bash
   python run_inference.py --source test_files/videos/video-3.mp4 --save
   ```
 
 - Webcam (index 0):
+
   ```bash
   python run_inference.py --source 0
   ```
@@ -205,3 +222,9 @@ By default, `--model` uses `MODEL_PATH` from `config.py`, keeping CLI and server
 
 ---
 
+## Documentation
+
+- Labeling SOP: `SOP_IMAGE_LABELING.md`
+- Dataset Organization SOP: `SOP_DATASET_ORGANIZATION.md`
+- Local macOS Training + VM Deploy SOP: `SOP_LOCAL_MAC_TRAIN_AND_DEPLOY.md`
+- Notebook/Colab Training + VM Deploy SOP: `SOP_TRAIN_AND_DEPLOY_VM.md`

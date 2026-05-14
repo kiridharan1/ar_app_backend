@@ -1,0 +1,10 @@
+path: /Users/kiridharan/Documents/Exp/ar_app_backend/data_charger
+train: train/images
+val: validation/images
+nc: 5
+names:
+- ARJUNA
+- CAT
+- LION
+- NANDHI
+- Charger

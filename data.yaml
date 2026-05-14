@@ -1,0 +1,12 @@
+path: /Users/kiridharan/Documents/Exp/ar_app_backend/data
+train: train/images
+val: validation/images
+test: test/images
+nc: 6
+names:
+  - ARJUNA
+  - CAT
+  - LION
+  - NANDHI
+  - Charger
+  - golf-ball
